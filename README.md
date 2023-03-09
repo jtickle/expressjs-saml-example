@@ -10,6 +10,9 @@ Features Represented in this example
 * SAML Single Sign-On
   * Initiated at /login
   * Completed at /auth/saml/sso
+* SAML Single Log-Out
+  * Initiated at /logout
+  * Completed at /auth/saml/slo
 * SAML Metadata Generation
   * Available from /auth/saml/metadata
 

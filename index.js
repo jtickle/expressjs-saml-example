@@ -6,6 +6,7 @@ const passport = require('passport')
 const SamlStrategy = require('passport-saml').Strategy
 const morgan = require('morgan')
 const fs = require('fs')
+const { nextTick } = require('process')
 
 // Add in variables from possible .env file to process.env
 dotenv.config()
@@ -37,8 +38,9 @@ const spSigningCert = fs.readFileSync(process.env.SAML_SP_SIGNING_CERT, 'utf8')
 
 // Set up SAML configuration for passport-saml
 const samlOptions = {
-  path: '/auth/saml/callback',
+  path: '/auth/saml/sso',
   entryPoint: process.env.SAML_IDP_LOGIN_URL,
+  logoutUrl: process.env.SAML_IDP_LOGOUT_URL,
   issuer: process.env.SAML_ISSUER,
   cert: idpCert,
   decryptionPvk: spDecryptionKey,
@@ -55,7 +57,8 @@ const samlStrategy = new SamlStrategy(samlOptions, function (profile, done) {
   // The second paramter to the `done` function is the user data that
   // will be stored into the session, later available from `req.user`
   done(null, {
-    nameId: profile.nameID,
+    nameID: profile.nameID,
+    nameIDFormat: profile.nameIDFormat,
     mail: profile.mail || profile.email,
     attributes: profile.attributes,
     cloudToken: process.env.CLOUD_SECRET
@@ -76,10 +79,24 @@ passport.serializeUser(function (user, done) {
 
 // Initiate SAML Login. This ALWAYS results in the user being sent to
 // the Identity Provider. If the user already has an IdP session, they
-// will very quickly be sent back to /login/callback with user data.
+// will very quickly be sent back to /auth/saml/sso with user data.
 // Otherwise, they leave your app and enter credentials and are sent
 // back if successful. (Note, if unsuccessful, they are never sent back.)
 app.use('/login', passport.authenticate('saml'))
+
+// Initiate SAML Single Logout. Not every IdP supports SLO. So, there
+// is some logic to try IdP SLO, and if it fails, fallback to local
+// logout. Either way, after SLO is complete, it terminates the local
+// user session by redirecting to /auth/saml/slo.
+app.use('/logout', function(req, res, next) {
+  if(!req.user) return next('You were not already logged in.')
+  //try {
+    samlStrategy.logout(req, function(error, sloUrl) {
+      if(error) return next(error)
+      res.redirect(sloUrl)
+    })
+  //}
+})
 
 // Here is where the Identity Provider sends the user back. Included
 // in the response are "attributes" with data about the user. The
@@ -93,7 +110,7 @@ app.use('/login', passport.authenticate('saml'))
 // ALSO NOTE, this is configured up in the SAML Strategy. You can change
 // the URL to fit your app, but you have to change it here and in the
 // SAML Strategy configuration.
-app.post('/auth/saml/callback',
+app.use('/auth/saml/sso',
 
   // The incoming SAML data is urlencoded and needs to be decoded
   bodyParser.urlencoded({ extended: false }),
@@ -107,6 +124,15 @@ app.post('/auth/saml/callback',
   // YOUR CODE HERE... at this point, the user has been authenticated.
   function(req, res) {
     res.json(req.user)
+  }
+)
+
+app.use('/auth/saml/slo',
+  function(req, res, next) {
+    req.logout(function(err) {
+      if (err) { return next(err) }
+      res.send('You are now logged out. Best practice is to 303 redirect away from this.')
+    })
   }
 )
 
